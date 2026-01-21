@@ -11,3 +11,5 @@ polars
 numpy
 matplotlib
 seaborn
+ipykernel
+plotly
