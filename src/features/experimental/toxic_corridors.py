@@ -14,16 +14,17 @@ def apply_toxic_corridor_features(df: pl.LazyFrame, toxic_corridors: pl.DataFram
       pl.col('fraud_rate').fill_null(0).alias('corridor_risk_score'),
   ])
 
+  # Use 500-row window (≈ 28 days based on typical transaction frequency)
   df = df.with_columns([
       pl.col('is_toxic_corridor')
-          .rolling_sum_by(window_size='28d', by='Timestamp')
+          .rolling_sum(window_size=500)
           .over('Account_HASHED')
           .shift(1)
           .fill_null(0)
           .alias('toxic_corridor_count_28d'),
 
       (pl.col('Amount Paid') * pl.col('is_toxic_corridor'))
-          .rolling_sum_by(window_size='28d', by='Timestamp')
+          .rolling_sum(window_size=500)
           .over('Account_HASHED')
           .shift(1)
           .fill_null(0)
