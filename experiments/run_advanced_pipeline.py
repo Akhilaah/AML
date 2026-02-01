@@ -30,10 +30,13 @@ Usage:
 import logging
 from pathlib import Path
 import sys
+import numpy as np
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.features.build_features import build_all_features
+# Note: Advanced features are imported and used via build_all_features,
+# which handles loading the correct _v2 versions with Polars-compatible syntax
 from src.model.train_model import train_aml_model
 from src.model.predict_model import AMLInferenceEngine
 import polars as pl
@@ -155,7 +158,14 @@ def run_complete_pipeline(
     
     logger.info(f"\n🎯 Performance Metrics (Threshold={model.threshold:.3f}):")
     logger.info(f"  ROC-AUC: {roc_auc_score(y_true, y_pred):.4f}")
-    logger.info(f"  PR-AUC: {auc(*precision_recall_curve(y_true, y_pred)[:2]):.4f}")
+    
+    # Compute PR-AUC with proper sorting to avoid monotonic order error
+    prec, rec, _ = precision_recall_curve(y_true, y_pred)
+    sorted_indices = np.argsort(rec)
+    rec_sorted = rec[sorted_indices]
+    prec_sorted = prec[sorted_indices]
+    logger.info(f"  PR-AUC: {auc(rec_sorted, prec_sorted):.4f}")
+    
     logger.info(f"  Precision: {precision_score(y_true, y_pred_binary):.4f}")
     logger.info(f"  Recall: {recall_score(y_true, y_pred_binary):.4f}")
     logger.info(f"  F1-Score: {f1_score(y_true, y_pred_binary):.4f}")
