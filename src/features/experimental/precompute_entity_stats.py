@@ -6,9 +6,8 @@ logging.basicConfig(level=logging.INFO)
 def precompute_entity_stats(accounts: pl.DataFrame) -> pl.DataFrame:
     """
     Compute entity statistics once, reuse for all splits.
-    OPTIMIZATION: Prevents 3x redundant computation.
     """
-    logger.info("🔧 Pre-computing entity statistics...")
+    logger.info(" Pre-computing entity statistics...")
     
     entity_stats = (
         accounts.lazy()

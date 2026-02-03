@@ -26,12 +26,15 @@ import polars as pl
 import pandas as pd
 
 # Import feature modules
+from src.features.experimental.base_features import add_base_features
+from src.features.experimental.precompute_entity_stats import precompute_entity_stats
 from src.features.experimental.rolling_features_v2 import (
     compute_rolling_features_batch1,
     compute_rolling_features_batch2,
     compute_rolling_features_batch3,
 )
 from src.features.experimental.ratio_features import compute_advanced_features
+from src.features.experimental.derived_features import compute_derived_features
 from src.features.experimental.advanced_rolling_features_v2 import (
     add_advanced_rolling_features
 )
@@ -42,69 +45,11 @@ from src.features.experimental.isolation_forest_anomaly import (
     add_isolation_forest_scores
 )
 from src.utils.hashing import hash_pii_column
+from src.features.experimental.network_features import add_network_features
+from src.features.experimental.toxic_corridors import apply_toxic_corridor_features
+
 
 logger = logging.getLogger(__name__)
-
-
-def add_base_features(df: pl.LazyFrame) -> pl.LazyFrame:
-    """
-    Add foundational temporal and benford features.
-    """
-    logger.info("Adding base temporal features...")
-    
-    # Cyclical time encoding
-    import numpy as np
-    df = df.with_columns([
-        (2 * np.pi * pl.col('Timestamp').dt.hour() / 24).sin().alias('hour_sin'),
-        (2 * np.pi * pl.col('Timestamp').dt.hour() / 24).cos().alias('hour_cos'),
-        (2 * np.pi * pl.col('Timestamp').dt.weekday() / 7).sin().alias('day_of_week_sin'),
-        (2 * np.pi * pl.col('Timestamp').dt.weekday() / 7).cos().alias('day_of_week_cos'),
-    ])
-    
-    # Benford's law features
-    logger.info("Adding Benford's law features...")
-    df = df.with_columns([
-        pl.col('Amount Paid')
-            .cast(pl.Utf8)
-            .str.replace_all(r'[^1-9].*', '')
-            .str.slice(0, 1)
-            .cast(pl.Int32, strict=False)
-            .alias('first_digit'),
-        (pl.col('Amount Paid') % 100 == 0).cast(pl.Int8).alias('is_round_100'),
-        (pl.col('Amount Paid') % 1000 == 0).cast(pl.Int8).alias('is_round_1000'),
-    ])
-    
-    # Account lifecycle features
-    logger.info("Adding account lifecycle features...")
-    df = df.with_columns([
-        pl.col('Timestamp').min().over('Account_HASHED').alias('account_first_txn')
-    ])
-    
-    df = df.with_columns([
-        ((pl.col('Timestamp') - pl.col('account_first_txn'))
-         .dt.total_seconds() / 86400)
-        .alias('account_tenure_days'),
-        
-        pl.col('Timestamp')
-            .rank(method='ordinal')
-            .over('Account_HASHED')
-            .alias('txn_rank_in_account_history'),
-        
-        ((pl.col('Timestamp') - pl.col('Timestamp').shift(1).over('Account_HASHED'))
-         .dt.total_seconds() / 86400)
-        .fill_null(0)
-        .alias('days_since_last_txn'),
-        
-        (pl.col('Timestamp') - pl.col('account_first_txn') >= pl.duration(days=7))
-        .cast(pl.Int8)
-        .alias('has_7d_history'),
-        
-        (pl.col('Timestamp') - pl.col('account_first_txn') >= pl.duration(days=28))
-        .cast(pl.Int8)
-        .alias('has_28d_history'),
-    ])
-    
-    return df
 
 
 def build_training_features(
@@ -150,27 +95,47 @@ def build_training_features(
         logger.info("  Step 2: Base features...")
         df = add_base_features(df)
         
+        # 2.5 Precompute features
+        logger.info("  Step 2.5: Precomputing golbal entity stats...")
+        df = precompute_entity_stats(df)
+
         # 3. Standard rolling features (from original pipeline)
         logger.info("  Step 3: Standard rolling features...")
+       
         df = compute_rolling_features_batch1(df)
         df = compute_rolling_features_batch2(df)
         df = compute_rolling_features_batch3(df)
         
         # 4. Derived/ratio features
-        logger.info("  Step 4: Ratio and derived features...")
+        logger.info("  Step 4: Ratio and Derived features...")
         df = compute_advanced_features(df)
+        df = compute_derived_features(df)
         
-        # 5. Advanced rolling features (NEW)
+        # 5. Advanced rolling features 
         logger.info("  Step 5: Advanced rolling features (burst, time-gaps, velocity)...")
         df = add_advanced_rolling_features(df)
+
+        #collect to eagar for next steps
+        if isinstance(df, pl.LazyFrame):
+            logger.info(" Materializing the Lazyframe (Switching to Eager)...")
+            df = df.collect(engine="streaming")
         
-        # 6. Counterparty entropy features (NEW)
+        logger.info(">>>REACHED BEFORE COUNTERPARTY FEATURES<<<")
+
+        # 6. Counterparty entropy features 
         logger.info("  Step 6: Counterparty entropy and network features...")
+        assert isinstance(df, pl.DataFrame), "Counterparty features expect eagar DataFrame"
         df = add_counterparty_entropy_features(df)
+        logger.info(">>>FINISHED COUNTERPARTY FREATURES")
         
-        # Collect to eager for next steps
-        logger.info("  Collecting to eager DataFrame (may require memory)...")
-        df = df.collect()
+        # 7. Network Features
+        logger.info("  Step 7: Network Features...")
+        df = add_network_features(df)
+
+        # 8. Toxic Corridors 
+        logger.info("  Step 8: Flagging Toxic Corridors...")
+        df = apply_toxic_corridor_features(df)
+       
         
         processed_splits[split_name] = df
     

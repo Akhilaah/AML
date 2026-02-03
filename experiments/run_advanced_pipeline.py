@@ -31,6 +31,8 @@ import logging
 from pathlib import Path
 import sys
 import numpy as np
+import warnings
+warnings.filterwarnings("ignore")
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 

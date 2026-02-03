@@ -67,8 +67,8 @@ def compute_counterparty_switching_metrics(df: pl.DataFrame) -> pl.DataFrame:
         (pl.col('Account_duplicated_0').ne(
             pl.col('Account_duplicated_0').shift(1).over('Account_HASHED')
         ))
+        .fill_null(False)
         .cast(pl.Int8)
-        .fill_null(0)
         .alias('is_counterparty_switch')
     ])
     

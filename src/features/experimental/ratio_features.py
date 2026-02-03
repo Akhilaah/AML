@@ -21,8 +21,8 @@ def compute_advanced_features(df: pl.LazyFrame) -> pl.LazyFrame:
     #Calculate a binary flag: 1 if current 'To Bank is different from previous 'To Bank', else 0
 
     df = df.with_columns([
-        (pl.col('To Bank').neq(pl.col('To Bank').shift(1).over('Account_HASHED'))
-         .fill_null(0)
+        (pl.col('To Bank').ne(pl.col('To Bank').shift(1).over('Account_HASHED'))
+         .fill_null(False)
          .cast(pl.Int8)
          .alias('is_counterparty_switch'))
     ])
@@ -43,13 +43,13 @@ def compute_advanced_features(df: pl.LazyFrame) -> pl.LazyFrame:
     #this helps detect patterns like deposit -> big withdraw -> deposit
 
     df = df.with_columns([
-        pl.col('Amount Paid').shift(1).over('Account_HASHED').alias('prev_amount_paid')
+        pl.col('Amount Paid').shift(1).over('Account_HASHED').alias('prev_amount_paid'),
 
         # # We create a binary "Rush" flag: transaction happened < 1 minute after previous
         ((pl.col('Timestamp') - pl.col('Timestamp').shift(1).over('Account_HASHED')).dt.total_seconds() < 60)
         .fill_null(False)
         .cast(pl.Int8)
-        .alias('is_rush_txn')
+        .alias('is_rush_txn'),
 
         #direction change: did we swiithc from senfing to receiving
         (pl.col('Amount Paid') > 0).shift(1).over('Account_HASHED').alias('prev_was_sender')

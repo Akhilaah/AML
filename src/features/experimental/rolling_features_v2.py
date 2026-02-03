@@ -85,24 +85,24 @@ def compute_rolling_features_batch3(df: pl.LazyFrame) -> pl.LazyFrame:
         pl.col('Amount Paid')
             .rolling_mean(window_size=500)
             .over('Account_HASHED')
-            .shift(1)
+            .shift(1.0)
             .alias('mean_amount_paid_28d'),
 
         pl.col('Amount Paid')
             .rolling_std(window_size=500)
             .over('Account_HASHED')
-            .shift(1)
+            .shift(1.0)
             .alias('std_amount_paid_28d'),
 
         pl.col('Amount Paid')
             .rolling_quantile(window_size=500, quantile=0.5)
             .over('Account_HASHED')
-            .shift(1)
+            .shift(1.0)
             .alias('median_amount_paid_28d'),
 
         pl.col('Amount Paid')
             .rolling_max(window_size=500)
             .over('Account_HASHED')
-            .shift(1)
+            .shift(1.0)
             .alias('max_amount_paid_28d'),
     ])

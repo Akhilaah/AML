@@ -224,3 +224,22 @@ def compute_corridor_risk_score(df: pl.LazyFrame) -> pl.LazyFrame:
     ])
     
     return df
+
+
+def add_network_features(df: pl.DataFrame) -> pl.DataFrame:
+    """ 
+    Add all network features
+    """
+    logger.info("  Building transaction network...")
+    df = build_transaction_networks(df)
+
+    logger.info("  Computing bank centrality...")
+    df = compute_bank_centrality_features(df)
+
+    logger.info("  Computing account network....")
+    df = compute_account_network_features(df)
+
+    logger.info("  Computing corridor risk score...")
+    df = compute_corridor_risk_score(df)
+
+    return df

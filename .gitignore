@@ -88,6 +88,7 @@ target/
 # Mypy cache
 .mypy_cache/
 atlas
+.venv312
 .env
 notebooks/aml_features/
 aml_features/
