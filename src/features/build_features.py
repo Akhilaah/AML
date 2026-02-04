@@ -28,6 +28,7 @@ import pandas as pd
 # Import feature modules
 from src.features.experimental.base_features import add_base_features
 from src.features.experimental.precompute_entity_stats import precompute_entity_stats
+
 from src.features.experimental.rolling_features_v2 import (
     compute_rolling_features_batch1,
     compute_rolling_features_batch2,
@@ -72,7 +73,17 @@ def build_training_features(
     logger.info("="*70)
     logger.info("BUILDING AML FEATURES")
     logger.info("="*70)
-    
+
+    entity_stats = None
+    if accounts is not None:
+        logger.info("  Precomputing entity-level stats from accounts...")
+        entity_stats = precompute_entity_stats(accounts)
+
+        if 'Account HASHED' not in entity_stats.columns and 'Account Number' in entity_stats.columns:
+            logger.info("  Hashing Account Number in entity_stats to produce Account_HASHED...")
+            entity_stats = hash_pii_column(entity_stats.lazy(), 'Account Number').collect()
+
+
     # Process each split
     splits = [
         ('train', train_df),
@@ -94,11 +105,16 @@ def build_training_features(
         # 2. Base features
         logger.info("  Step 2: Base features...")
         df = add_base_features(df)
-        
-        # 2.5 Precompute features
-        logger.info("  Step 2.5: Precomputing golbal entity stats...")
-        df = precompute_entity_stats(df)
 
+        # 2.1 Join precompute entity/accounts stats if available
+        if entity_stats is not None:
+            logger.info("  Step 2.5: Joining entity/accounts stats into transactions....")
+            df = df.join(entity_stats.lazy(), left_on='Account_HASHED', right_on='Account Number_HASHED', how='left')
+
+            assert 'Account_HASHED' in df.columns or isinstance(df, pl.LazyFrame), "Expected Account_HASHED in transaction df"
+            if entity_stats is not None:
+                assert 'Account Number_HASHED' in entity_stats.columns, "entity_stats must contain Account Number_HASHED for join"
+                
         # 3. Standard rolling features (from original pipeline)
         logger.info("  Step 3: Standard rolling features...")
        

@@ -230,8 +230,17 @@ def add_network_features(df: pl.DataFrame) -> pl.DataFrame:
     """ 
     Add all network features
     """
+    # Defensive check: ensure the input is a Polars DataFrame or LazyFrame to
+    # catch regressions where a different type (e.g., a tuple) is passed in.
+    assert isinstance(df, (pl.DataFrame, pl.LazyFrame)), (
+        "add_network_features expects a Polars DataFrame or LazyFrame"
+    )
+
     logger.info("  Building transaction network...")
-    df = build_transaction_networks(df)
+    # Build networks separately; do NOT overwrite `df` which should remain the
+    # transaction DataFrame. Overwriting `df` with the tuple caused subsequent
+    # feature computations to fail (it became a tuple instead of a DataFrame).
+    account_network, bank_network = build_transaction_networks(df)
 
     logger.info("  Computing bank centrality...")
     df = compute_bank_centrality_features(df)
@@ -242,4 +251,6 @@ def add_network_features(df: pl.DataFrame) -> pl.DataFrame:
     logger.info("  Computing corridor risk score...")
     df = compute_corridor_risk_score(df)
 
+    # Return the enhanced DataFrame. Keep networks in local variables in case
+    # they are needed later; if needed, consider returning them as well.
     return df
