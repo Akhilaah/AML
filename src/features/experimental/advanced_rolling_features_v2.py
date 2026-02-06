@@ -34,12 +34,14 @@ def compute_burst_score(df: pl.DataFrame) -> pl.DataFrame:
         pl.col('Timestamp')
             .count()
             .over(['Account_HASHED', 'hour_window'])
+            .cast(pl.UInt32)
             .alias('txn_in_hour')
     ])
     
     # 2. Rolling average (48-hour baseline)
     df = df.with_columns([
         pl.col('txn_in_hour')
+            .cast(pl.Float32)
             .rolling_mean(window_size=48)
             .over('Account_HASHED')
             .fill_null(1.0)
@@ -48,9 +50,9 @@ def compute_burst_score(df: pl.DataFrame) -> pl.DataFrame:
     
     # 3. Burst score (ratio to baseline, clamped 0-10)
     df = df.with_columns([
-        ((pl.col('txn_in_hour').cast(pl.Float64) / 
+        ((pl.col('txn_in_hour').cast(pl.Float32) / 
           (pl.col('baseline_txn_per_hour_24h') + 1.0)) - 1.0)
-        .cast(pl.Float64)
+        .cast(pl.Float32)
         .alias('burst_score_1h'),
         
         # Count bursts in 24-hour rolling window
@@ -59,6 +61,7 @@ def compute_burst_score(df: pl.DataFrame) -> pl.DataFrame:
         .rolling_sum(window_size=24)
         .over('Account_HASHED')
         .fill_null(0)
+        .cast(pl.UInt32)
         .alias('burst_count_24h')
     ])
     
@@ -81,6 +84,7 @@ def compute_timegap_statistics(df: pl.DataFrame) -> pl.DataFrame:
         ((pl.col('Timestamp') - pl.col('Timestamp').shift(1).over('Account_HASHED'))
          .dt.total_seconds() / 60.0)
         .fill_null(0.0)
+        .cast(pl.Float32)
         .alias('minutes_since_last_txn')
     ])
     
@@ -89,21 +93,25 @@ def compute_timegap_statistics(df: pl.DataFrame) -> pl.DataFrame:
         pl.col('minutes_since_last_txn')
             .rolling_mean(window_size=500)
             .over('Account_HASHED')
+            .cast(pl.Float32)
             .alias('avg_timegap_minutes_28d'),
         
         pl.col('minutes_since_last_txn')
             .rolling_min(window_size=500)
             .over('Account_HASHED')
+            .cast(pl.Float32)
             .alias('min_timegap_minutes_28d'),
         
         pl.col('minutes_since_last_txn')
             .rolling_max(window_size=500)
             .over('Account_HASHED')
+            .cast(pl.Float32)
             .alias('max_timegap_minutes_28d'),
         
         pl.col('minutes_since_last_txn')
             .rolling_std(window_size=500)
             .over('Account_HASHED')
+            .cast(pl.Float32)
             .alias('std_timegap_minutes_28d'),
     ])
     
@@ -112,6 +120,7 @@ def compute_timegap_statistics(df: pl.DataFrame) -> pl.DataFrame:
         (pl.col('std_timegap_minutes_28d') / 
          (pl.col('avg_timegap_minutes_28d') + 1.0))
         .fill_null(0.0)
+        .cast(pl.Float32)
         .alias('timegap_consistency_28d')
     ])
     
@@ -119,6 +128,7 @@ def compute_timegap_statistics(df: pl.DataFrame) -> pl.DataFrame:
     df = df.with_columns([
         ((pl.col('minutes_since_last_txn') - pl.col('avg_timegap_minutes_28d')) /
          (pl.col('avg_timegap_minutes_28d') + 1.0))
+        .cast(pl.Float32)
         .alias('timegap_acceleration')
     ])
     
@@ -138,6 +148,7 @@ def compute_velocity_metrics(df: pl.DataFrame) -> pl.DataFrame:
         pl.col('Amount Paid')
             .rolling_sum(window_size=100)
             .over('Account_HASHED')
+            .cast(pl.Float32)
             .alias('daily_amount_paid')
     ])
     
@@ -147,6 +158,7 @@ def compute_velocity_metrics(df: pl.DataFrame) -> pl.DataFrame:
         (pl.col('daily_amount_paid') - 
          pl.col('daily_amount_paid').shift(1).over('Account_HASHED'))
         .fill_null(0.0)
+        .cast(pl.Float32)
         .alias('txn_velocity_daily_delta'),
         
         # Percentage change in amounts
@@ -154,6 +166,7 @@ def compute_velocity_metrics(df: pl.DataFrame) -> pl.DataFrame:
           pl.col('daily_amount_paid').shift(1).over('Account_HASHED')) /
          (pl.col('daily_amount_paid').shift(1).over('Account_HASHED') + 0.000001))
         .fill_null(0.0)
+        .cast(pl.Float32)
         .alias('amount_velocity_daily_pct_change'),
     ])
     
@@ -162,6 +175,7 @@ def compute_velocity_metrics(df: pl.DataFrame) -> pl.DataFrame:
         (pl.col('amount_velocity_daily_pct_change') -
          pl.col('amount_velocity_daily_pct_change').shift(1).over('Account_HASHED'))
         .fill_null(0.0)
+        .cast(pl.Float32)
         .alias('amount_acceleration_2nd_order'),
     ])
     
@@ -181,17 +195,20 @@ def compute_concentration_metrics(df: pl.DataFrame) -> pl.DataFrame:
         pl.col('Account_duplicated_0')
         .n_unique()
         .over(['Account_HASHED', pl.col('Timestamp').dt.truncate('7d')])
+        .cast(pl.UInt32)
         .alias('unique_counterparties_7d'),
         
         pl.col('Account_duplicated_0')
         .n_unique()
         .over(['Account_HASHED', pl.col('Timestamp').dt.truncate('28d')])
+        .cast(pl.UInt32)
         .alias('unique_counterparties_28d'),
     ])
     
     # 2. HHI (Herfindahl-Hirschman Index approximation)
     df = df.with_columns([
         ((pl.col('unique_counterparties_28d') + 1) ** (-1.0))
+        .cast(pl.Float32)
         .alias('perfect_hhi_28d')
     ])
     
@@ -201,12 +218,14 @@ def compute_concentration_metrics(df: pl.DataFrame) -> pl.DataFrame:
             .rolling_mean(window_size=500)
             .over('Account_HASHED')
             .shift(1)
+            .cast(pl.Float32)
             .alias('mean_amount_paid_28d'),
         
         pl.col('Amount Paid')
             .rolling_std(window_size=500)
             .over('Account_HASHED')
             .shift(1)
+            .cast(pl.Float32)
             .alias('std_amount_paid_28d'),
     ])
     
@@ -215,6 +234,7 @@ def compute_concentration_metrics(df: pl.DataFrame) -> pl.DataFrame:
         (pl.col('std_amount_paid_28d') / 
          (pl.col('mean_amount_paid_28d') + 0.000001))
         .fill_null(0.0)
+        .cast(pl.Float32)
         .alias('amount_concentration_cv_28d')
     ])
     
@@ -239,15 +259,18 @@ def compute_round_number_patterns(df: pl.DataFrame) -> pl.DataFrame:
         pl.col('is_multiple_100')
             .rolling_mean(window_size=50)
             .over('Account_HASHED')
+            .cast(pl.Float32)
             .alias('round_100_ratio_50txns'),
         
         pl.col('is_multiple_1000')
             .rolling_mean(window_size=50)
             .over('Account_HASHED')
+            .cast(pl.Float32)
             .alias('round_1000_ratio_50txns'),
         
         (pl.col('is_multiple_100').rolling_sum(window_size=5) / 5.0)
             .over('Account_HASHED')
+            .cast(pl.Float32)
             .alias('consecutive_round_density_5txn'),
     ])
     
@@ -283,6 +306,7 @@ def compute_anomaly_cascade_features(df: pl.DataFrame) -> pl.DataFrame:
          pl.col('flag_extreme_consistency') +
          pl.col('flag_high_concentration') +
          pl.col('flag_heavy_structuring'))
+        .cast(pl.Int8)
         .alias('anomaly_cascade_score')
     ])
     
@@ -291,6 +315,7 @@ def compute_anomaly_cascade_features(df: pl.DataFrame) -> pl.DataFrame:
         (pl.col('anomaly_cascade_score') >= 2).cast(pl.Int8)
             .rolling_mean(window_size=500)
             .over('Account_HASHED')
+            .cast(pl.Float32)
             .alias('cascade_frequency_28d')
     ])
     

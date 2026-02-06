@@ -13,8 +13,8 @@ def precompute_entity_stats(accounts: pl.DataFrame) -> pl.DataFrame:
         accounts.lazy()
         .group_by('Entity ID')
         .agg([
-            pl.count().alias('entity_account_count'),
-            pl.col('Bank ID').n_unique().alias('entity_bank_count'),
+            pl.count().cast(pl.UInt32).alias('entity_account_count'),
+            pl.col('Bank ID').n_unique().cast(pl.UInt32).alias('entity_bank_count'),
         ])
         .collect()
     )

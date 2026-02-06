@@ -148,6 +148,9 @@ def compute_account_network_features(df: pl.LazyFrame) -> pl.LazyFrame:
     """
     logger.info("Computing account-level network features...")
     
+    # Ensure data is sorted for time-based rolling operations
+    df = df.sort(['Account_HASHED', 'Timestamp'])
+    
     # Counterparty diversity: count distinct 'To Bank' per account per window
     df = df.with_columns([
         pl.col('To Bank')

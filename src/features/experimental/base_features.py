@@ -35,14 +35,14 @@ def add_base_features(df: pl.LazyFrame) -> pl.LazyFrame:
     # 1. Cyclical Time Encoding
     # Captures periodic nature of time (e.g., 23:00 is close to 00:00)
     cyclical_features = [
-        (2 * np.pi * pl.col('Timestamp').dt.hour() / 24).sin().alias('hour_sin'),
-        (2 * np.pi * pl.col('Timestamp').dt.hour() / 24).cos().alias('hour_cos'),
+        (2 * np.pi * pl.col('Timestamp').dt.hour() / 24).sin().cast(pl.Float32).alias('hour_sin'),
+        (2 * np.pi * pl.col('Timestamp').dt.hour() / 24).cos().cast(pl.Float32).alias('hour_cos'),
         
-        (2 * np.pi * pl.col('Timestamp').dt.weekday() / 7).sin().alias('day_of_week_sin'),
-        (2 * np.pi * pl.col('Timestamp').dt.weekday() / 7).cos().alias('day_of_week_cos'),
+        (2 * np.pi * pl.col('Timestamp').dt.weekday() / 7).sin().cast(pl.Float32).alias('day_of_week_sin'),
+        (2 * np.pi * pl.col('Timestamp').dt.weekday() / 7).cos().cast(pl.Float32).alias('day_of_week_cos'),
         
-        (2 * np.pi * pl.col('Timestamp').dt.day() / 31).sin().alias('day_of_month_sin'),
-        (2 * np.pi * pl.col('Timestamp').dt.day() / 31).cos().alias('day_of_month_cos')
+        (2 * np.pi * pl.col('Timestamp').dt.day() / 31).sin().cast(pl.Float32).alias('day_of_month_sin'),
+        (2 * np.pi * pl.col('Timestamp').dt.day() / 31).cos().cast(pl.Float32).alias('day_of_month_cos')
     ]
 
     df = df.with_columns(cyclical_features)
@@ -77,7 +77,7 @@ def add_base_features(df: pl.LazyFrame) -> pl.LazyFrame:
         first_txn.alias('account_first_txn'),
 
         # Days since account's first transaction (Tenure)
-        (pl.col('Timestamp') - first_txn).dt.total_days().alias('account_tenure_days'),
+        (pl.col('Timestamp') - first_txn).dt.total_days().cast(pl.Float32).alias('account_tenure_days'),
 
         # Transaction Sequence (Ordinal Rank)
         pl.col('Timestamp')
@@ -90,7 +90,8 @@ def add_base_features(df: pl.LazyFrame) -> pl.LazyFrame:
         .diff()
         .over('Account_HASHED')
         .dt.total_days()
-        .fill_null(0) # First transaction gets 0
+        .fill_null(0)
+        .cast(pl.Float32) # First transaction gets 0
         .alias('days_since_last_txn'),
 
         # Flags for account maturity

@@ -6,12 +6,17 @@ def compute_advanced_features(df: pl.LazyFrame) -> pl.LazyFrame:
     2.counterparty diversity
     3.sequence contect
     """
+    
+    # Ensure data is sorted for time-based rolling operations
+    df = df.sort(['Account_HASHED', 'Timestamp'])
 
     #1. inflow/outflow ratio
     #a ratio close to 1.0 indicates pass-through behavior (smurfing/mule)
     #used a small epsilon to avoid division by zero
     df = df.with_columns([
-        (pl.col('total_amount_received_28d') / (pl.col('total_amount_paid_28d') + 1e-6)).alias('inflow_outflow_ratio_28d')
+        (pl.col('total_amount_received_28d') / (pl.col('total_amount_paid_28d') + 1e-6))
+        .cast(pl.Float32)
+        .alias('inflow_outflow_ratio_28d')
     ])
 
     #2. counterparty diversity
@@ -31,11 +36,11 @@ def compute_advanced_features(df: pl.LazyFrame) -> pl.LazyFrame:
     df = df.with_columns([
         pl.col('is_counterparty_switch').rolling_sum_by(
             by='Timestamp', window_size='7d'
-        ).over('Account_HASHED').shift(1).fill_null(0).alias('counterparty_diversity_7d'),
+        ).over('Account_HASHED').shift(1).fill_null(0).cast(pl.UInt32).alias('counterparty_diversity_7d'),
 
         pl.col('is_counterparty_switch').rolling_sum_by(
             by='Timestamp', window_size='28d'
-        ).over('Account_HASHED').shift(1).fill_null(0).alias('counterparty_diversity_28d')
+        ).over('Account_HASHED').shift(1).fill_null(0).cast(pl.UInt32).alias('counterparty_diversity_28d')
     ])
 
     #3. sequence modeling features (contexual lags)
@@ -43,7 +48,7 @@ def compute_advanced_features(df: pl.LazyFrame) -> pl.LazyFrame:
     #this helps detect patterns like deposit -> big withdraw -> deposit
 
     df = df.with_columns([
-        pl.col('Amount Paid').shift(1).over('Account_HASHED').alias('prev_amount_paid'),
+        pl.col('Amount Paid').shift(1).over('Account_HASHED').cast(pl.Float32).alias('prev_amount_paid'),
 
         # # We create a binary "Rush" flag: transaction happened < 1 minute after previous
         ((pl.col('Timestamp') - pl.col('Timestamp').shift(1).over('Account_HASHED')).dt.total_seconds() < 60)
@@ -52,7 +57,7 @@ def compute_advanced_features(df: pl.LazyFrame) -> pl.LazyFrame:
         .alias('is_rush_txn'),
 
         #direction change: did we swiithc from senfing to receiving
-        (pl.col('Amount Paid') > 0).shift(1).over('Account_HASHED').alias('prev_was_sender')
+        (pl.col('Amount Paid') > 0).shift(1).over('Account_HASHED').cast(pl.Int8).alias('prev_was_sender')
     ])
 
     return df

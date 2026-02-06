@@ -10,8 +10,8 @@ def apply_toxic_corridor_features(df: pl.LazyFrame, toxic_corridors: pl.DataFram
       on=['From Bank', 'To Bank'],
       how='left'
   ).with_columns([
-      pl.col('is_toxic_corridor').fill_null(0),
-      pl.col('fraud_rate').fill_null(0).alias('corridor_risk_score'),
+      pl.col('is_toxic_corridor').fill_null(0).cast(pl.Int8),
+      pl.col('fraud_rate').fill_null(0).cast(pl.Float32).alias('corridor_risk_score'),
   ])
 
   # Use 500-row window (≈ 28 days based on typical transaction frequency)
@@ -21,6 +21,7 @@ def apply_toxic_corridor_features(df: pl.LazyFrame, toxic_corridors: pl.DataFram
           .over('Account_HASHED')
           .shift(1)
           .fill_null(0)
+          .cast(pl.UInt32)
           .alias('toxic_corridor_count_28d'),
 
       (pl.col('Amount Paid') * pl.col('is_toxic_corridor'))
@@ -28,6 +29,7 @@ def apply_toxic_corridor_features(df: pl.LazyFrame, toxic_corridors: pl.DataFram
           .over('Account_HASHED')
           .shift(1)
           .fill_null(0)
+          .cast(pl.Float32)
           .alias('toxic_corridor_volume_28d'),
   ])
 
@@ -36,6 +38,7 @@ def apply_toxic_corridor_features(df: pl.LazyFrame, toxic_corridors: pl.DataFram
         pl.when(pl.col('total_amount_paid_28d') > 0)
           .then(pl.col('total_amount_paid_28d'))
           .otherwise(1.0))
+      .cast(pl.Float32)
       .alias('pct_volume_via_toxic_corridors'),
   ])
 

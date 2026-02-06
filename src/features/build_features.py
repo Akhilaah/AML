@@ -42,15 +42,20 @@ from src.features.experimental.advanced_rolling_features_v2 import (
 from src.features.experimental.counterparty_entropy_features_v2 import (
     add_counterparty_entropy_features
 )
-from src.features.experimental.isolation_forest_anomaly import (
-    add_isolation_forest_scores
-)
+
 from src.utils.hashing import hash_pii_column
 from src.features.experimental.network_features import add_network_features
 from src.features.experimental.toxic_corridors import apply_toxic_corridor_features
 
 
 logger = logging.getLogger(__name__)
+
+
+def optimize_dtypes(df: pl.LazyFrame) -> pl.LazyFrame:
+    return df.with_columns([
+        pl.col('Amount Paid').cast(pl.Float32),
+        pl.col('Amount Received').cast(pl.Float32)
+    ])
 
 
 def build_training_features(
@@ -98,6 +103,9 @@ def build_training_features(
         logger.info(f"Processing {split_name.upper()} split")
         logger.info(f"{'='*70}")
         
+        # 0. Optimize dtypes
+        df = optimize_dtypes(df)
+
         # 1. Sort for rolling features
         logger.info("  Step 1: Sorting...")
         df = df.sort(['Account_HASHED', 'Timestamp'])
@@ -128,14 +136,15 @@ def build_training_features(
         df = compute_derived_features(df)
         
         # 5. Advanced rolling features 
-        logger.info("  Step 5: Advanced rolling features (burst, time-gaps, velocity)...")
-        df = add_advanced_rolling_features(df)
-
         #collect to eagar for next steps
+        logger.info("  Step 5: Advanced rolling features (burst, time-gaps, velocity)...")
         if isinstance(df, pl.LazyFrame):
             logger.info(" Materializing the Lazyframe (Switching to Eager)...")
             df = df.collect(engine="streaming")
         
+        df = df.sort(['Account_HASHED', 'Timestamp'])
+        df = add_advanced_rolling_features(df)
+
         logger.info(">>>REACHED BEFORE COUNTERPARTY FEATURES<<<")
 
         # 6. Counterparty entropy features 
@@ -148,12 +157,23 @@ def build_training_features(
         logger.info("  Step 7: Network Features...")
         df = add_network_features(df)
 
+        if isinstance(df, pl.LazyFrame):
+            df = df.collect(engine='streaming')
+
         # 8. Toxic Corridors 
         logger.info("  Step 8: Flagging Toxic Corridors...")
-        df = apply_toxic_corridor_features(df)
+        df = apply_toxic_corridor_features(df.lazy(), toxic_corridors=None)
+
+        #final collection
+        if isinstance(df, pl.LazyFrame):
+            logger.info("  Final Materialization...")
+            df = df.collect(engine='streaming')
        
         
         processed_splits[split_name] = df
+        logger.info(f"  {split_name.upper()} split complete. Running Garbage Collection")
+        import gc
+        gc.collect()
     
     train_features = processed_splits['train']
     val_features = processed_splits['val']
@@ -189,7 +209,6 @@ def validate_features(df: pl.DataFrame) -> Dict:
     validation_report = {
         'num_rows': len(df),
         'num_features': len(df.columns),
-        'missing_rate': df.select(pl.col('*').is_null().sum()).to_dict(as_series=False),
     }
     
     # Check critical features for missing values
@@ -198,14 +217,12 @@ def validate_features(df: pl.DataFrame) -> Dict:
         if 'rolling' in col or 'burst' in col or 'entropy' in col or 'anomaly' in col
     ]
     
-    for col in critical_features:
+    for col in critical_features[:5]:
         missing = df.select(pl.col(col).is_null().sum()).item()
         if missing > 0:
-            logger.warning(f"  ⚠ {col}: {missing} missing values")
+            logger.warning(f"   {col}: {missing} missing values")
     
-    # Check numeric columns
-    numeric_cols = df.select(pl.col(pl.NUMERIC_DTYPES)).columns
-    
+
     # Basic statistics
     logger.info(f"\nFeature Statistics:")
     logger.info(f"  Total rows: {validation_report['num_rows']}")
@@ -230,7 +247,7 @@ def save_features(
 ):
     """Save feature sets to disk."""
     output_dir = Path(output_dir)
-    output_dir.mkdir(exist_ok=True)
+    output_dir.mkdir(exist_ok=True, parents=True)
     
     logger.info("\n" + "="*70)
     logger.info("Saving Features")
@@ -238,15 +255,18 @@ def save_features(
     
     for split_name, df in [('train', train_df), ('val', val_df), ('test', test_df)]:
         output_path = output_dir / f'{split_name}_features.parquet'
-        df.write_parquet(output_path)
-        logger.info(f"✓ {split_name}: {len(df)} rows → {output_path}")
+        df.write_parquet(output_path, compression='snappy')
+        logger.info(f" {split_name}: {len(df)} rows → {output_path}")
 
+        del df
+        import gc
+        gc.collect()
 
 def build_all_features(
     transactions_path: Path,
     accounts_path: Path,
     output_dir: Path = Path('./aml_features'),
-    compute_anomaly_scores: bool = True,
+    compute_anomaly_scores: bool = False,
     sample_fraction: Optional[float] = None
 ) -> Tuple[Path, Path, Path]:
     """
@@ -268,7 +288,14 @@ def build_all_features(
     
     # Load data
     logger.info(f"\nLoading transactions from {transactions_path}")
-    trans = pl.scan_csv(transactions_path, try_parse_dates=True)
+    trans = pl.scan_csv(
+        transactions_path, 
+        try_parse_dates=True,
+        dtypes={
+            'Amount Paid': pl.Float32,
+            'Amount Received': pl.Float32,   
+        }
+    )
     
     logger.info(f"Loading accounts from {accounts_path}")
     accounts = pl.read_csv(accounts_path)
@@ -294,10 +321,18 @@ def build_all_features(
     )
     test_df = trans.filter(pl.col('Timestamp') >= test_start)
     
+    del trans
+    import gc
+    gc.collect()
+
     # Build features
     train_features, val_features, test_features = build_training_features(
         train_df, val_df, test_df, accounts
     )
+    
+    del train_df, val_df, test_df
+    import gc
+    gc.collect()
     
     # Validate
     validate_features(train_features)
