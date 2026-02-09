@@ -1,22 +1,16 @@
 import polars as pl
-
+import logging
+logger = logging.getLogger(__name__)
 
 def compute_rolling_features(df: pl.LazyFrame) -> pl.LazyFrame:
     """
     rolling feature computation for AML datasets.
     """
     
-    #COLUMN PRUNING & TYPE OPTIMIZATION
-    df = df.select([
-        "Account_HASHED",
-        "Timestamp",
-        pl.col("Amount Paid").cast(pl.Float32),
-        pl.col("Amount Received").cast(pl.Float32)
-    ])
+    if not isinstance(df, pl.LazyFrame):
+        raise TypeError("compute_rolling_features requires LazyFrame input.")
 
-
-    # Rolling windows require sorted data. 
-    df = df.sort("Account_HASHED", "Timestamp")
+    logger.info("Computing rolling features...")
 
     return df.with_columns([
         # --- Batch 1: Counts ---
@@ -26,30 +20,27 @@ def compute_rolling_features(df: pl.LazyFrame) -> pl.LazyFrame:
         
         # 24h equivalent (Last 24 transactions)
         # Using integer window 24 aligns with the memory-efficient strategy.
-        pl.col('Timestamp')
+        pl.lit(1, dtype=pl.UInt32)
             .rolling_sum(window_size=24)
             .over('Account_HASHED')
             .shift(1)
             .fill_null(0)
-            .cast(pl.UInt32)
             .alias('txn_count_24h'),
             
         # 7d equivalent (Last 168 transactions)  
-        pl.col('Timestamp')
+        pl.lit(1, dtype=pl.UInt32)
             .rolling_sum(window_size=168)
             .over('Account_HASHED')
             .shift(1)
             .fill_null(0)
-            .cast(pl.UInt32)
             .alias('txn_count_7d'),
         
         # 28d equivalent (Last 500 transactions)
-        pl.col('Timestamp')
+        pl.lit(1, dtype=pl.UInt32)
             .rolling_sum(window_size=500)
             .over('Account_HASHED')
             .shift(1)
             .fill_null(0)
-            .cast(pl.UInt32)
             .alias('txn_count_28d'),
 
         # --- Batch 2: Volume (Window 500) ---

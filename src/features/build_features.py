@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Optional, Tuple, Dict
 import polars as pl
 import warnings
+import gc
 warnings.filterwarnings('ignore')
 
 # Import feature modules
@@ -78,15 +79,20 @@ def build_training_features(
     logger.info("BUILDING AML FEATURES")
     logger.info("="*70)
 
-    entity_stats = None
+    entity_stats_lazy = None
     if accounts is not None:
-        logger.info("  Precomputing entity-level stats from accounts...")
+        logger.info("   Precomputing entity-level stats from accounts...")
         entity_stats = precompute_entity_stats(accounts)
 
         if 'Account HASHED' not in entity_stats.columns and 'Account Number' in entity_stats.columns:
-            logger.info("  Hashing Account Number in entity_stats to produce Account_HASHED...")
+            logger.info("   Hashing Account Number in entity_stats to produce Account_HASHED...")
             entity_stats = hash_pii_column(entity_stats.lazy(), 'Account Number').collect()
 
+        entity_stats_lazy = entity_stats.lazy()
+        del entity_stats
+
+        import gc
+        gc.collect()
 
     # Process each split
     splits = [
@@ -106,88 +112,82 @@ def build_training_features(
         df = optimize_dtypes(df)
         
         # 1. Sort for rolling features
-        logger.info("  Step 1: Sorting(maintained through pipeline)...")
+        logger.info("   Step 1: Sorting(maintained through pipeline)...")
         df = df.sort(['Account_HASHED', 'Timestamp'])
         
         # 2. Base features
-        logger.info("  Step 2: Base features...")
+        logger.info("   Step 2: Base features...")
         df = add_base_features(df)
 
         # 2.1 Join precompute entity/accounts stats if available
-        if entity_stats is not None:
+        if entity_stats_lazy is not None:
             logger.info("  Step 2.5: Joining entity/accounts stats into transactions....")
-            df = df.join(entity_stats.lazy(), left_on='Account_HASHED', right_on='Account Number_HASHED', how='left')
+            df = df.join(entity_stats_lazy, left_on='Account_HASHED', right_on='Account Number_HASHED', how='left')
 
             assert 'Account_HASHED' in df.columns or isinstance(df, pl.LazyFrame), "Expected Account_HASHED in transaction df"
-            if entity_stats is not None:
-                assert 'Account Number_HASHED' in entity_stats.columns, "entity_stats must contain Account Number_HASHED for join"
+            if entity_stats_lazy is not None:
+                assert 'Account Number_HASHED' in entity_stats_lazy.columns, "entity_stats must contain Account Number_HASHED for join"
         
         # Checkpoint A: 
-        logger.info("  CHECKPOINT A: Materializing rolling features...")
+        logger.info("   CHECKPOINT A: Materializing base + entity features...")
         checkpoint_a_path = output_dir / f'{split_name}_checkpoint_base.parquet'
-        df.sink_parquet(checkpoint_a_path, compression='zstd', maintain_order=False)
+        df.sink_parquet(checkpoint_a_path, compression='zstd',)
+
+        df = pl.scan_parquet(checkpoint_a_path)
+        logger.info(f"  Checkpoint A written: {checkpoint_a_path}")
 
         import gc
         gc.collect()
-
-        df = pl.scan_parquet(checkpoint_a_path).sort(['Account_HASHED', 'Timestamp'])
-        logger.info(f"  Checkpoint A written to {checkpoint_a_path}")
 
         # 3. Standard rolling features (from original pipeline)
-        logger.info("  Step 3: Standard rolling features...")
-       
+        logger.info("   Step 3: Standard rolling features...")
         df = compute_rolling_features(df)
-        
-
-        logger.info("  CHECKPOINT B: Materilizing rolling features...")
-        checkpoint_b_path = output_dir / f'{split_name}_checkpoint_rolling.parquet'
-        df.sink_parquet(checkpoint_b_path, compression='zstd', maintain_order=False)
-
-        import gc
-        gc.collect()
-
-        df = pl.scan_parquet(checkpoint_b_path).sort(['Account_HASHED', 'Timestamp'])
-        logger.info(f"  Checkpoint writeen B to {checkpoint_b_path}")
-
+   
         # 4. Derived/ratio features
-        logger.info("  Step 4: Ratio and Derived features...")
+        logger.info("   Step 4: Ratio and Derived features...")
         df = compute_advanced_features(df)
         df = compute_derived_features(df)
 
-        logger.info("  CHECKPOINT C: Materializing ratio features...")
-        checkpoint_c_path = output_dir / f'{split_name}_checkpoint_ratio.parquet'
-        df.sink_parquet(checkpoint_c_path, compression='zstd', maintain_order=False)
+        # Checkpoint B: after all basic rolling/ratio features
+        logger.info("   CHECKPOINT B: Materializing rolling + ratio features...")
+        checkpoint_b_path = output_dir / f'{split_name}_checkpoint_rolling_ratio.parquet'
+        df.sink_parquet(checkpoint_b_path, compression='zstd',)
+
+        df = pl.scan_parquet(checkpoint_b_path)
+        logger.info(f"  Checkpoint B written: {checkpoint_b_path}")
 
         import gc
         gc.collect()
-        df = pl.scan_parquet(checkpoint_c_path).sort(['Account_HASHED', 'Timestamp'])
-        logger.info(f"  Checkpoint C written: {checkpoint_c_path}")
 
         # 5. Advanced rolling features 
-        logger.info("  Step 5: Advanced rolling features (burst, time-gaps, velocity)...")
+        logger.info("   Step 5: Advanced rolling features (burst, time-gaps, velocity)...")
         df = add_advanced_rolling_features(df)
 
-        logger.info("  CHECKPOINT D: Materializing advanced features...")
-        checkpoint_d_path = output_dir / f'{split_name}_checkpoint_advanced.parquet'
-        df.sink_parquet(checkpoint_d_path, compression='zstd', maintain_order=False)
+        # Cjeckpoint C: after advanced rolling
+        logger.info("   CHECKPOINT C: Materializing advanced rolling features...")
+        checkpoint_c_path = output_dir / f'{split_name}_checkpoint_advanced.parquet'
+        df.sink_parquet(checkpoint_c_path, compression='zstd',)
+
+        df = pl.scan_parquet(checkpoint_c_path)
+        logger.info(f"  Checkpoint C written: {checkpoint_c_path}")
 
         import gc
         gc.collect()
-        df = pl.scan_parquet(checkpoint_d_path).collect(engine='streaming')
 
         # 6. Counterparty entropy features 
-        logger.info("  Step 6: Counterparty entropy and network features...")
+        logger.info("   Step 6: Counterparty entropy and network features...")
         df = add_counterparty_entropy_features(df)
         
         # 7. Network Features
-        logger.info("  Step 7: Network Features...")
+        logger.info("   Step 7: Network Features...")
         df = add_network_features(df)
 
         # 8. Toxic Corridors 
-        logger.info("  Step 8: Flagging Toxic Corridors...")
-        df = apply_toxic_corridor_features(df.lazy(), toxic_corridors=None)
+        logger.info("   Step 8: Flagging Toxic Corridors...")
+        df = apply_toxic_corridor_features(df, toxic_corridors=None)
 
         #final collection
+        logger.info(f"  Final collection for {split_name} (streaming)..")
         if isinstance(df, pl.LazyFrame):
             df = df.collect(engine='streaming')
        
@@ -277,7 +277,7 @@ def save_features(
     
     for split_name, df in [('train', train_df), ('val', val_df), ('test', test_df)]:
         output_path = output_dir / f'{split_name}_features.parquet'
-        df.write_parquet(output_path, compression='snappy')
+        df.write_parquet(output_path, compression='zstd')
         logger.info(f" {split_name}: {len(df)} rows → {output_path}")
 
         del df
@@ -337,11 +337,15 @@ def build_all_features(
     test_start = max_timestamp - pl.duration(days=7)
     val_start = test_start - pl.duration(days=7)
     
-    train_df = trans.filter(pl.col('Timestamp') < val_start)
-    val_df = trans.filter(
-        (pl.col('Timestamp') >= val_start) & (pl.col('Timestamp') < test_start)
+    train_df = (
+        trans.filter(pl.col('Timestamp') < val_start).sort(['Account_HASHED', 'Timestamp'])
+        )
+    val_df = (trans.filter(
+        (pl.col('Timestamp') >= val_start) & (pl.col('Timestamp') < test_start)).sort(['Account_HASHED', 'Timestamp'])
     )
-    test_df = trans.filter(pl.col('Timestamp') >= test_start)
+    test_df = (
+        trans.filter(pl.col('Timestamp') >= test_start).sort(['Account_HASHED', 'Timestamp'])
+        )
     
     del trans
     import gc

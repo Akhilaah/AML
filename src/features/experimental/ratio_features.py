@@ -7,8 +7,8 @@ def compute_advanced_features(df: pl.LazyFrame) -> pl.LazyFrame:
     3.sequence contect
     """
     
-    # Ensure data is sorted for time-based rolling operations
-    df = df.sort(['Account_HASHED', 'Timestamp'])
+    if not isinstance(df, pl.LazyFrame):
+      raise TypeError("compute_advanced_features requires LazyFrame input.")
 
     #1. inflow/outflow ratio
     #a ratio close to 1.0 indicates pass-through behavior (smurfing/mule)

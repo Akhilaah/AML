@@ -16,50 +16,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def build_transaction_networks(df: pl.LazyFrame) -> Tuple[nx.DiGraph, nx.DiGraph]:
-    """
-    Build two directed networks from transaction data:
-    1. Account-to-Account network (via shared bank relationships)
-    2. Bank-to-Bank network (direct transaction corridors)
-    
-    Returns:
-        Tuple of (account_network, bank_network)
-    """
-    # Collect data needed for network construction
-    network_data = df.select([
-        'Account_HASHED',
-        'From Bank',
-        'To Bank',
-        'Amount Paid',
-        'Amount Received'
-    ]).collect()
-    
-    # Build bank-to-bank network
-    bank_network = nx.DiGraph()
-    
-    # Build account network (accounts connected through shared banks)
-    account_network = nx.DiGraph()
-    
-    for row in network_data.iter_rows(named=True):
-        from_bank = row['From Bank']
-        to_bank = row['To Bank']
-        account = row['Account_HASHED']
-        amount_paid = row['Amount Paid']
-        
-        # Bank network: From Bank -> To Bank
-        if bank_network.has_edge(from_bank, to_bank):
-            bank_network[from_bank][to_bank]['weight'] += amount_paid
-            bank_network[from_bank][to_bank]['count'] += 1
-        else:
-            bank_network.add_edge(from_bank, to_bank, weight=amount_paid, count=1)
-        
-        # Account network: this only uses Bank edges for now
-        # (could be extended to co-account relationships)
-        if not account_network.has_node(account):
-            account_network.add_node(account)
-    
-    return account_network, bank_network
-
 
 def compute_bank_centrality_features(df: pl.LazyFrame) -> pl.LazyFrame:
     """
@@ -70,12 +26,13 @@ def compute_bank_centrality_features(df: pl.LazyFrame) -> pl.LazyFrame:
     
     # PRE-AGGREGATE: Reduce 32M rows → ~10K bank pairs
     bank_edges = (
-        df.select(['From Bank', 'To Bank'])
-        .group_by(['From Bank', 'To Bank'])
-        .agg(pl.count().alias('weight'))
-        .collect(streaming=True)  # Now only ~10K rows
+        df.group_by(['From Bank', 'To Bank']).agg([
+            pl.count().alias('weight'),
+            pl.col('Amount Paid').sum().alias('total_amount_paid')
+        ]).collect(engine='streaming')
     )
-    
+    logger.info(f"  Aggregated to {len(bank_edges)} bank pairs")
+      
     # Build network from aggregated edges (10K iterations vs 32M)
     bank_network = nx.DiGraph()
     for row in bank_edges.iter_rows(named=True):
@@ -146,8 +103,6 @@ def compute_account_network_features(df: pl.LazyFrame) -> pl.LazyFrame:
     """
     logger.info("Computing account-level network features...")
     
-    # Ensure data is sorted for time-based rolling operations
-    df = df.sort(['Account_HASHED', 'Timestamp'])
     
     # Counterparty diversity: count distinct 'To Bank' per account per window
     df = df.with_columns([
@@ -236,12 +191,6 @@ def add_network_features(df: pl.DataFrame) -> pl.DataFrame:
     assert isinstance(df, (pl.DataFrame, pl.LazyFrame)), (
         "add_network_features expects a Polars DataFrame or LazyFrame"
     )
-
-    logger.info("  Building transaction network...")
-    # Build networks separately; do NOT overwrite `df` which should remain the
-    # transaction DataFrame. Overwriting `df` with the tuple caused subsequent
-    # feature computations to fail (it became a tuple instead of a DataFrame).
-    account_network, bank_network = build_transaction_networks(df)
 
     logger.info("  Computing bank centrality...")
     df = compute_bank_centrality_features(df)

@@ -17,7 +17,7 @@ import gc
 
 logger = logging.getLogger(__name__)
 
-def compute_counterparty_entropy(df: pl.DataFrame, chunk_size: int = 10000) -> pl.DataFrame:
+def compute_counterparty_entropy(df: pl.LazyFrame, chunk_size: int = 10000) -> pl.LazyFrame:
     """
     Shannon entropy-like diversity metrics for counterparties.
     REFACTORED: Eliminate chunked filtering, use single lazy aggregation.
@@ -41,11 +41,12 @@ def compute_counterparty_entropy(df: pl.DataFrame, chunk_size: int = 10000) -> p
                 .sum()
                 .over('Account_HASHED')
                 .cast(pl.Float32)
+                .neg()
                 .alias('entropy_value')
         ])
         .select(['Account_HASHED', 'entropy_value'])
         .unique()
-        .collect(engine='streaming')  # Streaming collect for aggregation
+
     )
     
     # Join back (now both are eager DataFrames)
@@ -58,14 +59,13 @@ def compute_counterparty_entropy(df: pl.DataFrame, chunk_size: int = 10000) -> p
     return df.drop('entropy_value')
 
 
-def compute_counterparty_switching_metrics(df: pl.DataFrame) -> pl.DataFrame:
+def compute_counterparty_switching_metrics(df: pl.LazyFrame) -> pl.LazyFrame:
     """
     Detect round-robin money laundering (switching between counterparties).
     
     If A->X->A->Y->A pattern, that's suspicious.
     """
-    df = df.sort(['Account_HASHED', 'Timestamp'])
-    
+
     # 1. Counterparty switches
     df = df.with_columns([
         (pl.col('Account_duplicated_0').ne(
@@ -112,7 +112,7 @@ def compute_counterparty_switching_metrics(df: pl.DataFrame) -> pl.DataFrame:
     return df
 
 
-def compute_network_balance_ratios(df: pl.DataFrame) -> pl.DataFrame:
+def compute_network_balance_ratios(df: pl.LazyFrame) -> pl.LazyFrame:
     """
     Inflow vs outflow balance (money mule and pass-through detection).
     
@@ -120,7 +120,7 @@ def compute_network_balance_ratios(df: pl.DataFrame) -> pl.DataFrame:
     - Pass-through: inflow ≈ outflow
     - Collector: Many inflows, few outflows
     """
-    df = df.sort(['Account_HASHED', 'Timestamp'])
+   
     
     # 1. Balance metrics
     df = df.with_columns([
@@ -165,13 +165,13 @@ def compute_network_balance_ratios(df: pl.DataFrame) -> pl.DataFrame:
     return df
 
 
-def compute_temporal_counterparty_patterns(df: pl.DataFrame) -> pl.DataFrame:
+def compute_temporal_counterparty_patterns(df: pl.LazyFrame) -> pl.LazyFrame:
     """
     Time-of-day patterns in counterparty selection.
     
     Automated systems have consistent patterns (suspicious).
     """
-    df = df.sort(['Account_HASHED', 'Timestamp'])
+  
     
     # 1. Hour of day patterns
     df = df.with_columns([
@@ -191,13 +191,13 @@ def compute_temporal_counterparty_patterns(df: pl.DataFrame) -> pl.DataFrame:
     return df
 
 
-def compute_relationship_asymmetry(df: pl.DataFrame) -> pl.DataFrame:
+def compute_relationship_asymmetry(df: pl.LazyFrame) -> pl.LazyFrame:
     """
     Detect one-way relationships (A→B but B doesn't send to A).
     
     Typical of money mules and launderers.
     """
-    df = df.sort(['Account_HASHED', 'Timestamp'])
+   
     
     # 1. Create directed pairs
     df = df.with_columns([
@@ -246,13 +246,13 @@ def compute_relationship_asymmetry(df: pl.DataFrame) -> pl.DataFrame:
     return df
 
 
-def compute_network_centrality_proxy(df: pl.DataFrame) -> pl.DataFrame:
+def compute_network_centrality_proxy(df: pl.LazyFrame) -> pl.LazyFrame:
     """
     Proxy for hub-and-spoke network detection.
     
     Hubs (mules) have many connections as in/out nodes.
     """
-    df = df.sort(['Account_HASHED', 'Timestamp'])
+    
     
     # 1. In-degree and out-degree approximations
     df = df.with_columns([
@@ -278,7 +278,7 @@ def compute_network_centrality_proxy(df: pl.DataFrame) -> pl.DataFrame:
     return df
 
 
-def add_counterparty_entropy_features(df: pl.DataFrame) -> pl.DataFrame:
+def add_counterparty_entropy_features(df: pl.LazyFrame) -> pl.LazyFrame:
     """
     Add all counterparty-based network features.
     
@@ -287,8 +287,11 @@ def add_counterparty_entropy_features(df: pl.DataFrame) -> pl.DataFrame:
     import logging
     logger = logging.getLogger(__name__)
     
+    if not isinstance(df, pl.LazyFrame):
+        raise TypeError("add_counterparty_entropy_features requires LazyFrame input.")
+    
     logger.info("  Computing counterparty entropy...")
-    df = compute_counterparty_entropy(df, chunk_size=10000)
+    df = compute_counterparty_entropy(df)
     
     logger.info("  Computing counterparty switching metrics...")
     df = compute_counterparty_switching_metrics(df)

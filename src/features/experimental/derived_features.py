@@ -2,6 +2,11 @@ import polars as pl
 
 def compute_derived_features(df: pl.LazyFrame) -> pl.LazyFrame:
     """Compute derived features from rolling statistics."""
+
+    if not isinstance(df, pl.LazyFrame):
+        raise TypeError("compute_derived_features requires LazyFrame input.")
+
+        
     return df.with_columns([
         #transaction velocity
         (pl.col('txn_count_24h') / (pl.col('txn_count_7d') + 1))
