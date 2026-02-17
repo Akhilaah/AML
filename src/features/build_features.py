@@ -131,7 +131,7 @@ def build_training_features(
         # Checkpoint A: 
         logger.info("   CHECKPOINT A: Materializing base + entity features...")
         checkpoint_a_path = output_dir / f'{split_name}_checkpoint_base.parquet'
-        df.collect(engine='streaming').write_parquet(checkpoint_a_path, compression=None, row_group_size=100_000)
+        df.sink_parquet(checkpoint_a_path, compression='zstd')
 
         df = pl.scan_parquet(checkpoint_a_path)
         logger.info(f"   Checkpoint A written: {checkpoint_a_path}")
@@ -151,7 +151,7 @@ def build_training_features(
         # Checkpoint B: after all basic rolling/ratio features
         logger.info("   CHECKPOINT B: Materializing rolling + ratio features...")
         checkpoint_b_path = output_dir / f'{split_name}_checkpoint_rolling_ratio.parquet'
-        df.collect(engine='streaming').write_parquet(checkpoint_b_path, compression=None, row_group_size=100_000)
+        df.sink_parquet(checkpoint_b_path, compression='zstd')
 
         df = pl.scan_parquet(checkpoint_b_path)
         logger.info(f"   Checkpoint B written: {checkpoint_b_path}")
@@ -160,7 +160,7 @@ def build_training_features(
         gc.collect()
 
         adv_rolling_ip_cols = [
-            'Account_HASHED', 'Timestamp', 'Amount Paid', 'Amount Received'
+            'Account_HASHED', 'Timestamp', 'Amount Paid', 'Amount Received', 'Account_duplicated_0', 
         ]
 
         # 5. Advanced rolling features
@@ -173,11 +173,8 @@ def build_training_features(
         df_adv = (
             df_adv_input
             .pipe(add_advanced_rolling_features)
-            .collect(streaming=True)
+            .sink_parquet(checkpoint_c_path, compression='zstd')
         )
-
-        df_adv.write_parquet(checkpoint_c_path, compression=None, row_group_size=100_000)
-
         # reattach to main frame
         df = (
             pl.scan_parquet(checkpoint_b_path)
@@ -193,23 +190,7 @@ def build_training_features(
         gc.collect()
 
         logger.info(f"   Checkpoint C written: {checkpoint_c_path}")
-
-
-        # # 5. Advanced rolling features 
-        # logger.info("   Step 5: Advanced rolling features (burst, time-gaps, velocity)...")
-        # df = add_advanced_rolling_features(df)
-
-        # # Cjeckpoint C: after advanced rolling
-        # logger.info("   CHECKPOINT C: Materializing advanced rolling features...")
-        # checkpoint_c_path = output_dir / f'{split_name}_checkpoint_advanced.parquet'
-        # df.sink_parquet(checkpoint_c_path, compression='zstd',)
-
-        # df = pl.scan_parquet(checkpoint_c_path)
-        # logger.info(f"   Checkpoint C written: {checkpoint_c_path}")
-
-        # import gc
-        # gc.collect()
-
+        
         # 6. Counterparty entropy features 
         logger.info("   Step 6: Counterparty entropy and network features...")
         df = add_counterparty_entropy_features(df)
@@ -222,6 +203,14 @@ def build_training_features(
         logger.info("   Step 8: Flagging Toxic Corridors...")
         df = apply_toxic_corridor_features(df, toxic_corridors=None)
 
+        # Checkpoint D: Materializing the counterparty, network, toxic corridots
+        logger.info("   Checkpoint D: Materializing the couterparty + network + toxic corridors...")
+        checkpoint_d_path = output_dir / f"{split_name}_checkpoint_final.parquet"
+        df.sink_parquet(checkpoint_d_path, compression='zstd')
+
+        df = pl.scan_parquet(checkpoint_d_path)
+        logger.info(f"   Chekpoint D written: {checkpoint_d_path}")
+        
         #final collection
         logger.info(f"  Final collection for {split_name} (streaming)..")
         if isinstance(df, pl.LazyFrame):
@@ -356,6 +345,8 @@ def build_all_features(
             transactions_path, 
             try_parse_dates=True,
             dtypes={
+                'From Bank': pl.Utf8,
+                'To Bank': pl.Utf8,
                 'Amount Paid': pl.Float32,
                 'Amount Received': pl.Float32,   }
         ).sink_parquet(trans_parquet_path, compression='snappy')
@@ -388,6 +379,7 @@ def build_all_features(
     # Hash PII
     logger.info("Hashing PII columns...")
     trans = hash_pii_column(trans, 'Account')
+    trans = trans.with_columns(pl.col('Account_HASHED').cast(pl.Utf8))
     
     # Create temporal splits
     logger.info("Creating temporal splits...")

@@ -12,5 +12,5 @@ def hash_pii_column(df: pl.LazyFrame, col_name: str) -> pl.LazyFrame:
         df = df.drop(f"{col_name}_HASHED")
     
     return df.with_columns(
-        pl.col(col_name).hash(seed=42).alias(f"{col_name}_HASHED")
+        pl.col(col_name).hash(seed=42).cast(pl.Utf8).alias(f"{col_name}_HASHED")
     )

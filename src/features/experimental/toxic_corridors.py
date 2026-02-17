@@ -47,13 +47,14 @@ def apply_toxic_corridor_features(df: pl.LazyFrame, toxic_corridors: pl.DataFram
 
   df = df.with_columns([
     pl.col('is_toxic_corridor').fill_null(0).cast(pl.Int8),
-    pl.col('fraud_rate').fill_null(0.0).cast(pl.Flaot32).alias('corridor_risk_score'),
+    pl.col('fraud_rate').fill_null(0.0).cast(pl.Float32).alias('corridor_risk_score'),
     ])
 
   # Use 500-row window (≈ 28 days based on typical transaction frequency)
   df = df.with_columns([
       pl.col('is_toxic_corridor')
-          .rolling_sum(by= 'Timestamp', window_size=500)
+          .cast(pl.Int64)
+          .rolling_sum(window_size=500)
           .over('Account_HASHED')
           .shift(1)
           .fill_null(0)
@@ -61,7 +62,7 @@ def apply_toxic_corridor_features(df: pl.LazyFrame, toxic_corridors: pl.DataFram
           .alias('toxic_corridor_count_28d'),
 
       (pl.col('Amount Paid') * pl.col('is_toxic_corridor'))
-          .rolling_sum(by='Timestamp', window_size=500)
+          .rolling_sum(window_size=500)
           .over('Account_HASHED')
           .shift(1)
           .fill_null(0)
@@ -71,7 +72,7 @@ def apply_toxic_corridor_features(df: pl.LazyFrame, toxic_corridors: pl.DataFram
 
   df = df.with_columns([
       (pl.col('toxic_corridor_volume_28d') /
-        pl.when(pl.col('total_amount_paid_28d') > 0)
+        pl.when(pl.col('total_amount_paid_28d') > 0.0)
           .then(pl.col('total_amount_paid_28d'))
           .otherwise(1.0))
       .cast(pl.Float32)
