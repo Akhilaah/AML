@@ -48,15 +48,28 @@ def setup_directories():
 
 
 # ---------------- LOAD SMALL TRAIN SAMPLE ----------------
-def load_sample_for_training(split="train", frac=0.002):
+def load_sample_for_training(split="train", frac=0.1, batch_size=200_000):
+    """
+    Memory safe sampler → loads fraction in chunks instead of full RAM load
+    """
     path = INPUT_DIR / f"{split}_features.parquet"
-    logger.info(f"Sampling {frac*100:.2f}% of {split}")
+    logger.info(f"Sampling {frac*100:.2f}% of {split} for training (streaming)")
 
     lf = pl.scan_parquet(path)
-    lf = lf.filter(pl.int_range(0, pl.count()) % int(1/frac) == 0)
+    lf = lf.filter(pl.int_range(0, pl.len()) % int(1/frac) == 0)
 
-    df = lf.collect().to_pandas()
-    logger.info(f"Loaded sample rows: {len(df):,}")
+    batches = []
+    total = 0
+
+    for batch in lf.collect(streaming=True).iter_slices(batch_size):
+        pdf = batch.to_pandas()
+        batches.append(pdf)
+        total += len(pdf)
+        logger.info(f"Loaded {total:,} sampled rows...")
+
+    df = pd.concat(batches, ignore_index=True)
+    logger.info(f"Final sampled dataset: {len(df):,} rows")
+
     return df
 
 
@@ -189,7 +202,7 @@ def main():
     setup_directories()
 
     # ---- Train ----
-    train_df = load_sample_for_training("train", 0.002)
+    train_df = load_sample_for_training("train", 0.1)
     feature_cols = identify_feature_columns(train_df)
     median_values = compute_median(train_df, feature_cols)
 
