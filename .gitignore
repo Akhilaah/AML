@@ -98,3 +98,4 @@ models/
 *.pkl
 data/
 outputs/
+models/*.pkl
