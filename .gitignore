@@ -93,3 +93,8 @@ atlas
 ecvenv
 notebooks/aml_features/
 aml_features/
+# models
+models/
+*.pkl
+data/
+outputs/
